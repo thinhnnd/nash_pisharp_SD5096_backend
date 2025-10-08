@@ -1,0 +1,130 @@
+# Azure DevOps Pipeline for Backend Application
+# Build and push Docker image to ACR
+
+name: Backend-Build-$(Date:yyyyMMdd)-$(Rev:r)
+
+trigger:
+  branches:
+    include:
+    - main
+    - develop
+  paths:
+    exclude:
+    - README.md
+    - docs/*
+    - '*.md'
+
+variables:
+  # Version configuration
+  majorVersion: 1
+  minorVersion: 0
+  patchVersion: '$(Build.BuildId)'
+  branchName: '$(Build.SourceBranchName)'
+  
+  # Azure Container Registry
+  containerRegistry: 'acrServiceConnection'  # Update this to match your ACR service connection name
+  imageRepository: 'backend'
+  dockerfilePath: 'Dockerfile'
+  
+  # Build configuration
+  vmImageName: 'ubuntu-latest'
+
+stages:
+- stage: Build
+  displayName: 'Build and Push Backend'
+  jobs:
+  - job: BuildBackend
+    displayName: 'Build Backend Application'
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - checkout: self
+      displayName: 'Checkout backend source'
+    
+    - task: PowerShell@2
+      displayName: 'Set Version Tags'
+      inputs:
+        targetType: 'inline'
+        script: |
+          $branchName = "$(Build.SourceBranchName)"
+          $versionedTag = "v$(majorVersion).$(minorVersion).$(patchVersion)"
+          $latestTag = ""
+          
+          Write-Host "Branch: $branchName"
+          Write-Host "Versioned tag: $versionedTag"
+          
+          # Set tags based on branch
+          if ($branchName -eq "main") {
+            $latestTag = "latest"
+            Write-Host "##vso[task.setvariable variable=versionedTag]$versionedTag"
+            Write-Host "##vso[task.setvariable variable=latestTag]$latestTag"
+            Write-Host "Tags will be: $versionedTag, $latestTag"
+          } elseif ($branchName -eq "develop") {
+            $devTag = "dev-v$(majorVersion).$(minorVersion).$(patchVersion)"
+            Write-Host "##vso[task.setvariable variable=versionedTag]$versionedTag"
+            Write-Host "##vso[task.setvariable variable=latestTag]$devTag"
+            Write-Host "Tags will be: $versionedTag, $devTag"
+          } else {
+            Write-Host "##vso[task.setvariable variable=versionedTag]$versionedTag"
+            Write-Host "##vso[task.setvariable variable=latestTag]"
+            Write-Host "Tags will be: $versionedTag"
+          }
+          
+    - task: NodeTool@0
+      displayName: 'Setup Node.js'
+      inputs:
+        versionSpec: '18.x'
+        
+    - script: |
+        echo "Installing dependencies..."
+        npm ci
+      displayName: 'Install dependencies'
+      workingDirectory: '$(Build.SourcesDirectory)'
+      
+    - script: |
+        echo "Running tests..."
+        npm run test
+      displayName: 'Run tests'
+      workingDirectory: '$(Build.SourcesDirectory)'
+      continueOnError: true
+      
+    - script: |
+        echo "Running security audit..."
+        npm audit --audit-level high
+      displayName: 'Security audit'
+      workingDirectory: '$(Build.SourcesDirectory)'
+      continueOnError: true
+      
+    - task: Docker@2
+      displayName: 'Build Docker image'
+      inputs:
+        containerRegistry: '$(containerRegistry)'
+        repository: '$(imageRepository)'
+        command: 'build'
+        Dockerfile: '$(dockerfilePath)'
+        buildContext: '$(Build.SourcesDirectory)'
+        tags: |
+          $(versionedTag)
+          $(latestTag)
+          
+    - task: Docker@2
+      displayName: 'Push image to ACR'
+      inputs:
+        containerRegistry: '$(containerRegistry)'
+        repository: '$(imageRepository)'
+        command: 'push'
+        tags: |
+          $(versionedTag)
+          $(latestTag)
+          
+    - script: |
+        echo "✅ Backend build completed successfully!"
+        echo "📦 Images created:"
+        echo "   - $(imageRepository):$(versionedTag)"
+        if [ -n "$(latestTag)" ]; then
+          echo "   - $(imageRepository):$(latestTag)"
+        fi
+        echo "🔗 Registry: ACR"
+        echo "🌿 Branch: $(branchName)"
+        echo "🏷️ Version: $(majorVersion).$(minorVersion).$(patchVersion)"
+      displayName: 'Build Summary'
