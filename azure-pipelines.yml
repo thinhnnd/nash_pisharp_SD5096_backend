@@ -154,11 +154,45 @@ stages:
         targetType: 'inline'
         script: |
           Write-Host "🔍 Running Trivy security scan on backend image..."
-          $imageName = "$(imageRepository):$(versionedTag)"
-          $trivyExe = "$(trivyPath)"
           
-          Write-Host "Using Trivy executable: $trivyExe"
+          # Get the full image name that was built
+          $imageRepo = "$(imageRepository)"
+          $imageTag = "$(versionedTag)"
+          $imageName = "$imageRepo`:$imageTag"
+          
+          Write-Host "Repository: $imageRepo"
+          Write-Host "Tag: $imageTag"
           Write-Host "Scanning image: $imageName"
+          
+          $trivyExe = "$(trivyPath)"
+          Write-Host "Using Trivy executable: $trivyExe"
+          
+          # List available images for debugging
+          Write-Host ""
+          Write-Host "🔍 Available Docker images:"
+          try {
+            $images = docker images --format "table {{.Repository}}:{{.Tag}}" | Where-Object { $_ -notmatch "REPOSITORY:TAG" }
+            $images | ForEach-Object { Write-Host "   $_" }
+            
+            # Try to find our image
+            $ourImage = $images | Where-Object { $_ -match $imageRepo -and $_ -match $imageTag.Replace("v", "") }
+            if ($ourImage) {
+              Write-Host "✅ Found our built image: $ourImage"
+              $imageName = $ourImage.Trim()
+            } else {
+              Write-Host "⚠️ Exact image not found, trying with just repository name..."
+              $ourImage = $images | Where-Object { $_ -match $imageRepo } | Select-Object -First 1
+              if ($ourImage) {
+                Write-Host "✅ Found similar image: $ourImage"
+                $imageName = $ourImage.Trim()
+              }
+            }
+          } catch {
+            Write-Host "⚠️ Could not list Docker images: $_"
+          }
+          
+          Write-Host ""
+          Write-Host "Final image name for scan: $imageName"
           
           # Set Trivy cache directory
           $env:TRIVY_CACHE_DIR = "$(trivyCache)"
